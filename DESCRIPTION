@@ -1,0 +1,37 @@
+Package: fluxcapacitoR
+Type: Package
+Title: Flux-Focused Age Modeling for Layered Sediments
+Version: 0.1.0
+Date: 2026-06-12
+Authors@R: c(
+    person("Nicholas", "McKay" ,email = "nick@nau.edu", role = c("aut", "cre"),
+      comment = c(ORCID = "0000-0003-3598-5113")
+    )
+  )
+Maintainer: Nick McKay <nick@nau.edu>
+Description: An age modeling strategy focused on flux and accumulation
+    rates in layered sediments. Builds varve-informed age-ensemble priors
+    that combine low-frequency monotone spline fits to dated horizons
+    with high-frequency simulated annual-layer (varve) variability,
+    evaluates age ensembles against calibrated age distributions, and
+    simulates synthetic varve thickness series with AR(1) or long-memory
+    persistence. Part of the 'geoChronR' package family.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports:
+    crayon,
+    dplyr,
+    fracdiff,
+    Hmisc,
+    pbapply,
+    purrr,
+    scam,
+    stats,
+    tidyr
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+URL: https://github.com/nickmckay/fluxcapacitoR
+BugReports: https://github.com/nickmckay/fluxcapacitoR/issues
+RoxygenNote: 7.3.1
