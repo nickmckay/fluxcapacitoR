@@ -1,0 +1,275 @@
+---
+title: "Flux-focused age modeling with fluxcapacitoR"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Flux-focused age modeling with fluxcapacitoR}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  warning = FALSE,
+  message = FALSE
+)
+set.seed(42)
+```
+
+## Overview
+
+`fluxcapacitoR` reframes age modeling around *flux* — sedimentation and
+accumulation rates — rather than age directly. Starting from an existing
+age-depth ensemble (e.g. a Bacon or BChron model stored in a LiPD file), it:
+
+1. estimates sedimentation rate (years per unit depth) for each ensemble
+   member,
+2. simulates high-frequency annual-layer ("varve") thickness variability with
+   tunable persistence (`addVarves()` / `simulateVarves()`), and
+3. uses a Metropolis-Hastings search to find the persistence (`ar1`) and
+   varve-scaling parameters whose simulated flux series are most consistent
+   with the calibrated radiometric date distributions (`ageProbsDT()`).
+
+This vignette runs a deliberately small version of that search on one lake so
+it builds quickly; in practice you would use many more iterations.
+
+```{r libs}
+library(fluxcapacitoR)
+library(lipdR)
+library(geoChronR)
+library(ggplot2)
+library(purrr)
+library(dplyr)
+```
+
+## Load a dataset
+
+We bundle one example record — Lake Imandra (Holtzman et al., 2024) — in the
+package. It carries a chron ensemble (`ageEnsemble`) and the calibrated date
+distributions (`distributionTable`) we evaluate against.
+
+```{r load}
+L <- readLipd(system.file("extdata", "Imandra.Holtzman.2024.lpd",
+                          package = "fluxcapacitoR"))
+chron.model <- 1
+DT <- L$chronData[[1]]$model[[chron.model]]$distributionTable
+```
+
+## Sedimentation rate from the existing ensemble
+
+`getSedRatesFromChronEnsemble()` is a small helper (defined here in the
+vignette; a good candidate to migrate into the package) that differences the
+age ensemble with depth to get per-member sedimentation rates.
+
+```{r sedrates}
+getSedRatesFromChronEnsemble <- function(L, chron.num = 1, model.num = 1,
+                                         ens.table.num = 1, depth.var.name = "depth",
+                                         age.ens.var.name = "ageEnsemble") {
+  et <- L$chronData[[chron.num]]$model[[model.num]]$ensembleTable[[ens.table.num]]
+  ae <- et[[age.ens.var.name]]$values
+  depths <- et[[depth.var.name]]$values
+  srEns <- apply(ae, 2, \(x) diff(x) / diff(depths))
+  srDepths <- rowMeans(cbind(depths[-1], depths[-length(depths)]))
+  meanSedRate <- apply(ae, 2, \(a, d) diff(range(d)) / diff(range(a)), depths)
+  list(ageEns = ae, ageEnsDepths = depths, srDepths = srDepths, srEns = srEns,
+       srUnits = paste0(et[[age.ens.var.name]]$units, "/", et[[depth.var.name]]$units),
+       depthUnits = et[[depth.var.name]]$units,
+       depthResolution = abs(median(diff(srDepths))), meanSedRate = meanSedRate)
+}
+
+ensembleData <- getSedRatesFromChronEnsemble(L, model.num = chron.model)
+dim(ensembleData$ageEns)
+```
+
+We interpolate each member's sedimentation rate onto a regular depth grid and
+rebuild ages by cumulative integration, then score the starting ensemble
+against the dated distributions with `ageProbsDT()`.
+
+```{r interp}
+depth.step <- 0.5
+depths.to.model <- seq(min(ensembleData$ageEnsDepths) - depth.step / 2,
+                       max(ensembleData$ageEnsDepths) + depth.step / 2, by = depth.step)
+depths.to.model.sr <- rowMeans(cbind(depths.to.model[-1], depths.to.model[-length(depths.to.model)]))
+
+interpolated.yrPerDepth <- apply(ensembleData$srEns, 2,
+  \(sr) Hmisc::approxExtrap(x = ensembleData$srDepths, y = sr,
+                            xout = depths.to.model, method = "linear")$y)
+interpolated.yrPerDepth[!is.finite(interpolated.yrPerDepth)] <- 0
+interpolated.yrPerDepth[interpolated.yrPerDepth < 0] <- 0
+
+startYears <- apply(ensembleData$ageEns, 2, min, na.rm = TRUE)
+sym <- matrix(startYears, ncol = ncol(interpolated.yrPerDepth),
+              nrow = nrow(interpolated.yrPerDepth), byrow = TRUE)
+interpolated.ageEns <- apply(interpolated.yrPerDepth, 2, \(x) cumsum(x * depth.step)) + sym
+
+origObj <- ageProbsDT(DT, ageEstimates = interpolated.ageEns, depths = depths.to.model.sr)
+summary(origObj)
+```
+
+## The Metropolis-Hastings search
+
+Priors on the two tuned parameters:
+
+```{r priors}
+priorAr1 <- function(ar1) if (ar1 >= 1 | ar1 < 0) 0 else dnorm(ar1, mean = 0.5, sd = 0.25)
+priorVarveScalingFactor <- function(v) if (v < 0) 0 else 0.1
+```
+
+Search settings. These are tiny so the vignette builds fast — a real run uses
+`n.it` in the thousands and `nBest`/`nVarveEns` of ~100+.
+
+```{r mcmc-settings}
+n.it <- 40
+nBest <- 100
+nVarveEns <- 50
+ar1Step <- 0.1
+varveScalingFactorStep <- 5
+```
+
+```{r mcmc}
+ar1Chain <- varveScalingFactorChain <- objChain <- matrix(NA, nrow = n.it)
+varveScalingFactorChain[1] <- 25
+ar1Chain[1] <- 0.5
+
+sorted <- sort(origObj, decreasing = TRUE, index.return = TRUE)
+si <- sorted$ix
+fracReplaced <- 0
+interpolated.ageEns <- interpolated.ageEns[, si[1:nBest]]
+interpolated.yrPerDepth <- interpolated.yrPerDepth[, si[1:nBest]]
+
+best <- map(1:nBest, \(s) list(obj = min(sorted$x[1:nBest]),
+                               ageEns = interpolated.ageEns[, s],
+                               ar1 = NA, varveScalingFactor = NA, i = 0))
+objChain[1] <- -Inf
+
+for (i in 2:n.it) {
+  ar1Chain[i] <- ar1Chain[i - 1]
+  varveScalingFactorChain[i] <- varveScalingFactorChain[i - 1]
+  repeat {
+    if (i %% 2 == 0) ar1Chain[i] <- ar1Chain[i] + rnorm(1, sd = ar1Step)
+    else varveScalingFactorChain[i] <- varveScalingFactorChain[i] + rnorm(1, sd = varveScalingFactorStep)
+    priorObj <- log(priorAr1(ar1Chain[i])) + log(priorVarveScalingFactor(varveScalingFactorChain[i]))
+    if (is.finite(priorObj)) break
+  }
+
+  if (fracReplaced < 1) {
+    srEstimate <- interpolated.yrPerDepth[, sample(seq_len(nBest), size = nVarveEns)]
+  } else {
+    bestEns <- map(best[sample(seq_len(nBest), size = nVarveEns)], "ageEns") |>
+      list_c() |> matrix(nrow = length(depths.to.model), ncol = nVarveEns)
+    newSrEns <- apply(bestEns, 2, \(x) diff(x) / diff(depths.to.model))
+    srEstimate <- apply(newSrEns, 2,
+      \(sr) Hmisc::approxExtrap(x = depths.to.model.sr, y = sr,
+                                xout = depths.to.model, method = "linear")$y)
+    srEstimate[!is.finite(srEstimate)] <- 0
+    srEstimate[srEstimate < 0] <- 0
+  }
+
+  result <- addVarves(ages = interpolated.ageEns[, sample(seq_len(nVarveEns))],
+                      model.depths = depths.to.model.sr,
+                      yrPerDepth = srEstimate,
+                      totalDepth = diff(range(ensembleData$ageEnsDepths)),
+                      varveMean = mean(ensembleData$meanSedRate) * varveScalingFactorChain[i],
+                      ar1 = ar1Chain[i], H = NULL,
+                      n.varve.ens = nVarveEns, DT = DT, progress = FALSE)
+
+  proposedObj <- mean(sort(result$varvedPriorLogObj, decreasing = TRUE)[1:nBest], na.rm = TRUE) + priorObj
+  objChain[i] <- proposedObj
+  if (!((objChain[i] - objChain[i - 1]) > log(runif(1)))) {
+    objChain[i] <- objChain[i - 1]
+    ar1Chain[i] <- ar1Chain[i - 1]
+    varveScalingFactorChain[i] <- varveScalingFactorChain[i - 1]
+  }
+
+  currentBest <- map_dbl(best, "obj")
+  if (any(result$varvedPriorLogObj > min(currentBest))) {
+    sorted <- sort(result$varvedPriorLogObj, decreasing = TRUE, index.return = TRUE)
+    si <- sorted$ix
+    for (s in seq_along(si)) {
+      iae <- Hmisc::approxExtrap(result$ageDepths, result$agePriors[, si[s]], xout = depths.to.model)$y
+      best[[which.min(currentBest)]] <- list(obj = result$varvedPriorLogObj[si[s]],
+                                             ageEns = iae, ar1 = ar1Chain[i],
+                                             varveScalingFactor = varveScalingFactorChain[i], i = i)
+      currentBest <- map_dbl(best, "obj")
+      if (!any(sorted$x[-seq(1, s)] > min(currentBest))) break
+    }
+  }
+  fracReplaced <- mean(!is.na(map_dbl(best, "ar1")))
+}
+
+bestObj <- map_dbl(best, "obj")
+bestEns <- map(best, "ageEns") |> list_c() |> matrix(nrow = length(depths.to.model), ncol = nBest)
+```
+
+## Did the fit improve?
+
+The updated ensemble shifts toward higher log-likelihood against the dated
+distributions:
+
+```{r obj-compare}
+ggplot() +
+  geom_density(aes(x = origObj, fill = "Original")) +
+  geom_density(aes(x = bestObj, fill = "Updated"), alpha = 0.5) +
+  scale_fill_manual(paste(nBest, "best ensemble members"),
+                    values = c("gray30", "red")) +
+  labs(x = "log(objective)", y = "Probability density") +
+  theme_bw()
+```
+
+## Age models, before and after
+
+```{r agemodels, fig.height = 4}
+plotModelDistributions(L, model.num = chron.model) |>
+  plotTimeseriesEnsLines(X = bestEns, Y = depths.to.model,
+                         alp = 0.1, n.ens.plot = 50, color = "red") +
+  scale_y_reverse("Depth (cm)") +
+  labs(x = "Age (yr BP)", title = paste(L$dataSetName, "updated"))
+```
+
+## Sedimentation rate through time
+
+```{r sedrate-plot}
+newSrEns <- apply(bestEns, 2, \(x) diff(x) / diff(depths.to.model))
+srEstimate <- apply(newSrEns, 2,
+  \(sr) Hmisc::approxExtrap(x = depths.to.model.sr, y = sr,
+                            xout = depths.to.model, method = "linear")$y)
+srEstimate[!is.finite(srEstimate)] <- 0
+srEstimate[srEstimate < 0] <- 0
+
+plotTimeseriesEnsRibbons(X = depths.to.model, Y = 1 / interpolated.yrPerDepth) |>
+  plotTimeseriesEnsRibbons(X = depths.to.model, Y = 1 / srEstimate, alp = 0.5,
+                           color.low = "pink", color.high = "coral", color.line = "red") +
+  scale_y_log10("Sedimentation rate (cm/yr)") +
+  xlab("Depth (cm)")
+```
+
+## Power spectrum of sedimentation rate
+
+We pass `x.lims` explicitly here: the `plotSpectraEns()` in the released
+geoChronR errors when `x.lims` is left `NULL` (fixed on the development branch
+that this package was split from).
+
+```{r spectra}
+spectraEnsOld <- computeSpectraEns(time = depths.to.model, values = 1 / interpolated.yrPerDepth)
+spectraEnsNew <- computeSpectraEns(time = depths.to.model.sr, values = 1 / newSrEns)
+
+x.lims <- rev(range(1 / spectraEnsOld$freq))
+plotSpectraEns(spec.ens = spectraEnsOld, x.lims = x.lims) +
+  labs(x = "Period (cm per cycle)")
+```
+
+## Saving results
+
+Everything needed to reconstruct or re-plot a run fits in a single list:
+
+```{r save, eval = FALSE}
+keyData <- list(best = best,
+                ensembleData = ensembleData,
+                depths.to.model = depths.to.model,
+                depths.to.model.sr = depths.to.model.sr,
+                L = L)
+saveRDS(keyData, file = file.path(tempdir(), paste0(L$dataSetName, "-fluxCapacitoR.RDS")))
+```

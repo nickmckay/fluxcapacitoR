@@ -30,8 +30,17 @@ Imports:
     stats,
     tidyr
 Suggests:
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    ggplot2,
+    lipdR,
+    geoChronR
 Config/testthat/edition: 3
+VignetteBuilder: knitr
 URL: https://github.com/nickmckay/fluxcapacitoR
 BugReports: https://github.com/nickmckay/fluxcapacitoR/issues
+Remotes:
+    nickmckay/lipdR,
+    nickmckay/GeoChronR
 RoxygenNote: 7.3.1

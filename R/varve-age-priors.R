@@ -198,7 +198,37 @@ createVarveAgePriors <- function(DT,
   return(varvedPrior)
 }
 
-#' @noRd
+#' Add high-frequency varve variability to age-depth ensembles
+#'
+#' The core of the flux model: takes an ensemble of low-frequency age-depth
+#' estimates and a per-member sedimentation-rate (years-per-depth) estimate,
+#' simulates annual-layer (varve) thickness variability with the requested
+#' persistence, scales it to be consistent with total depth and total age, and
+#' returns an updated ensemble of age priors plus their log-likelihood against
+#' the dated distributions. Called repeatedly inside the parameter-fitting loop
+#' (see the package vignette).
+#'
+#' @param ages Matrix of low-frequency age estimates (depth x ensemble member).
+#' @param model.depths Depths corresponding to the rows of `ages` /
+#'   `yrPerDepth`.
+#' @param yrPerDepth Matrix of years-per-depth (inverse sedimentation rate),
+#'   same shape as `ages`.
+#' @param totalDepth Total depth spanned by the record, used to rescale
+#'   simulated varve depths.
+#' @param varveMean Mean simulated varve thickness.
+#' @param H Hurst parameter for long-memory varve simulation. Specify `H` or
+#'   `ar1`, not both.
+#' @param ar1 AR(1) coefficient for varve simulation.
+#' @param n.varve.ens Number of varve ensemble members (must match the number
+#'   of columns of `ages`).
+#' @param DT A LiPD distribution table (list of distribution table objects)
+#'   used to evaluate the fit.
+#' @param progress Show progress bars?
+#'
+#' @return A list with `agePriors` (matrix of updated age priors), `ageDepths`
+#'   (depths they're evaluated at), and `varvedPriorLogObj` (log-likelihood of
+#'   each ensemble member).
+#' @export
 addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H, ar1, n.varve.ens, DT,progress = TRUE){
   nYears <- apply(ages, 2, \(x) ceiling(max(x)) - floor(min(x)))
 
