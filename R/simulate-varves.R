@@ -4,30 +4,26 @@
 #' temporal persistence from either an AR(1) process or long-memory
 #' fractional differencing (fBm-like, via the Hurst parameter).
 #'
-#' The AR(1) path is fully vectorized: the whole ensemble is generated with a
-#' single recursive filter over a matrix of innovations (with a burn-in to
-#' reach stationarity), which is far faster than simulating members one at a
-#' time. The long-memory path still simulates members independently and can be
-#' spread across cores with `n.cores`.
+#' Both paths are fully vectorized across the ensemble: AR(1) via a single
+#' recursive filter over a matrix of innovations (with a burn-in to reach
+#' stationarity), and long-memory via exact circulant-embedding simulation of
+#' fractional Gaussian noise (see [fgnEnsemble()]).
 #'
 #' @param n Number of years (layers) to simulate.
 #' @param n.ens Number of ensemble members (columns) to simulate.
 #' @param ar1 AR(1) coefficient. Specify `ar1` or `H`, not both.
-#' @param H Hurst parameter for long-memory simulation (much slower than
-#'   AR(1)).
+#' @param H Hurst parameter for long-memory (fractional Gaussian noise)
+#'   simulation, `0.5 < H < 1`.
 #' @param shape Shape parameter of the gamma distribution of varve
 #'   thicknesses.
 #' @param mean Mean varve thickness.
 #' @param length.out If not `NA`, pad the output matrix with `NA` rows to this
 #'   length.
-#' @param n.cores Number of cores for the long-memory (`H`) path. Defaults to
-#'   1 (serial); values > 1 use [parallel::mclapply()] and fall back to serial
-#'   on Windows.
 #'
 #' @return An `n` (or `length.out`) x `n.ens` matrix of simulated varve
 #'   thicknesses.
 #' @export
-simulateVarves <- function(n, n.ens = 100, ar1 = NULL, H = NULL, shape = 2, mean = 1, length.out = NA, n.cores = 1) {
+simulateVarves <- function(n, n.ens = 100, ar1 = NULL, H = NULL, shape = 2, mean = 1, length.out = NA) {
   if (!is.null(ar1) && !is.null(H)) {
     stop("Specify either AR(1) coefficient 'ar1' or Hurst parameter 'H', not both.")
   }
@@ -42,12 +38,10 @@ simulateVarves <- function(n, n.ens = 100, ar1 = NULL, H = NULL, shape = 2, mean
     sim <- matrix(as.numeric(sim), nrow = n + burn, ncol = n.ens)[-seq_len(burn), , drop = FALSE]
     gamma_series <- gammify(sim, shape = shape, mean = mean)
   } else if (!is.null(H)) {
-    # Fractal Brownian Motion (fBM) via fractional differencing. This is MUCH
-    # slower than AR(1) and does not vectorize; spread members across cores.
-    series <- mcMap(n.cores, seq_len(n.ens),
-                    \(i) fracdiff::fracdiff.sim(n = n, d = H - 0.5)$series)
-    gamma_series <- matrix(unlist(series), nrow = n, ncol = n.ens) |>
-      gammify(shape = shape, mean = mean)
+    # Long memory: exact fractional Gaussian noise (the increments of
+    # fractional Brownian motion) via circulant embedding -- vectorized across
+    # the whole ensemble, no per-member simulation.
+    gamma_series <- gammify(fgnEnsemble(n, n.ens, H), shape = shape, mean = mean)
   } else {
     stop("You must specify either 'ar1' for AR(1) or 'H' for fBM.")
   }
@@ -112,13 +106,37 @@ gammify <- function (X, shape = 1.5, mean = 1, jitter = FALSE){
   return(Xn)
 }
 
-#' @noRd
-# Cross-platform map that optionally forks across cores. mclapply forking is
-# unavailable on Windows, so fall back to serial there.
-mcMap <- function(n.cores, x, fun){
-  if (n.cores > 1 && .Platform$OS.type != "windows") {
-    parallel::mclapply(x, fun, mc.cores = n.cores)
-  } else {
-    lapply(x, fun)
+#' Simulate fractional Gaussian noise by circulant embedding
+#'
+#' Exact simulation of stationary fractional Gaussian noise (fGn, the
+#' increments of fractional Brownian motion) with Hurst parameter `H`, using
+#' the Davies-Harte / Wood-Chan circulant embedding. The embedding eigenvalues
+#' are computed once and reused for every ensemble member -- all members are
+#' drawn with a single column-wise FFT -- and the circulant is padded to a
+#' power-of-2 length so the FFT is fast. For `0.5 < H < 1` the embedding is
+#' non-negative definite; tiny negative eigenvalues from round-off are clamped
+#' to zero as a guard.
+#'
+#' @param n Number of samples (years) per member.
+#' @param n.ens Number of ensemble members (columns).
+#' @param H Hurst parameter, `0.5 < H < 1`.
+#'
+#' @return An `n` x `n.ens` matrix of unit-variance fGn.
+#' @export
+fgnEnsemble <- function(n, n.ens, H){
+  if (n < 3) {                       # too short for embedding; H is irrelevant
+    return(matrix(stats::rnorm(n * n.ens), nrow = n, ncol = n.ens))
   }
+  m <- as.integer(2^ceiling(log2(2 * (n - 1))))   # power-of-2 embedding length
+  half <- m %/% 2L
+  k <- 0:half
+  rk <- 0.5 * (abs(k + 1)^(2*H) - 2*abs(k)^(2*H) + abs(k - 1)^(2*H))  # fGn autocovariance
+  firstRow <- c(rk, rk[half:2])      # first row of the symmetric circulant
+  lambda <- Re(stats::fft(firstRow)) # embedding eigenvalues (>= 0 for fGn)
+  lambda[lambda < 0] <- 0
+  sl <- sqrt(lambda / m)
+  Z <- matrix(stats::rnorm(m * n.ens), m, n.ens) +
+    1i * matrix(stats::rnorm(m * n.ens), m, n.ens)
+  X <- Re(stats::mvfft(sl * Z))
+  X[seq_len(n), , drop = FALSE]
 }

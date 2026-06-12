@@ -224,15 +224,12 @@ createVarveAgePriors <- function(DT,
 #' @param DT A LiPD distribution table (list of distribution table objects)
 #'   used to evaluate the fit.
 #' @param progress Show progress bars?
-#' @param n.cores Number of cores for the long-memory (`H`) varve simulation
-#'   (passed to [simulateVarves()]); ignored for the AR(1) path, which is
-#'   already vectorized.
 #'
 #' @return A list with `agePriors` (matrix of updated age priors), `ageDepths`
 #'   (depths they're evaluated at), and `varvedPriorLogObj` (log-likelihood of
 #'   each ensemble member).
 #' @export
-addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H, ar1, n.varve.ens, DT, progress = TRUE, n.cores = 1){
+addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H, ar1, n.varve.ens, DT, progress = TRUE){
   nYears <- apply(ages, 2, \(x) ceiling(max(x)) - floor(min(x)))
   maxN <- max(nYears)
 
@@ -240,7 +237,7 @@ addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H,
   # each member back to its own number of years (NA-padding the tail, as the
   # per-member length.out did before)
   v1 <- simulateVarves(n = maxN, n.ens = length(nYears), ar1 = ar1, H = H,
-                       mean = varveMean, n.cores = n.cores)
+                       mean = varveMean)
   for (k in which(nYears < maxN)) v1[(nYears[k] + 1L):maxN, k] <- NA
 
   vInv <- 1/v1

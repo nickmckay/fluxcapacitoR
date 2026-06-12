@@ -22,10 +22,8 @@ Roxygen: list(markdown = TRUE)
 Imports:
     crayon,
     dplyr,
-    fracdiff,
     Hmisc,
     matrixStats,
-    parallel,
     pbapply,
     purrr,
     scam,

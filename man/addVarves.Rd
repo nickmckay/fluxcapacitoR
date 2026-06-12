@@ -14,8 +14,7 @@ addVarves(
   ar1,
   n.varve.ens,
   DT,
-  progress = TRUE,
-  n.cores = 1
+  progress = TRUE
 )
 }
 \arguments{
@@ -44,10 +43,6 @@ of columns of \code{ages}).}
 used to evaluate the fit.}
 
 \item{progress}{Show progress bars?}
-
-\item{n.cores}{Number of cores for the long-memory (\code{H}) varve simulation
-(passed to \code{\link[=simulateVarves]{simulateVarves()}}); ignored for the AR(1) path, which is
-already vectorized.}
 }
 \value{
 A list with \code{agePriors} (matrix of updated age priors), \code{ageDepths}

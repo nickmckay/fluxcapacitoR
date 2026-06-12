@@ -11,8 +11,7 @@ simulateVarves(
   H = NULL,
   shape = 2,
   mean = 1,
-  length.out = NA,
-  n.cores = 1
+  length.out = NA
 )
 }
 \arguments{
@@ -22,8 +21,8 @@ simulateVarves(
 
 \item{ar1}{AR(1) coefficient. Specify \code{ar1} or \code{H}, not both.}
 
-\item{H}{Hurst parameter for long-memory simulation (much slower than
-AR(1)).}
+\item{H}{Hurst parameter for long-memory (fractional Gaussian noise)
+simulation, \verb{0.5 < H < 1}.}
 
 \item{shape}{Shape parameter of the gamma distribution of varve
 thicknesses.}
@@ -32,10 +31,6 @@ thicknesses.}
 
 \item{length.out}{If not \code{NA}, pad the output matrix with \code{NA} rows to this
 length.}
-
-\item{n.cores}{Number of cores for the long-memory (\code{H}) path. Defaults to
-1 (serial); values > 1 use \code{\link[parallel:mclapply]{parallel::mclapply()}} and fall back to serial
-on Windows.}
 }
 \value{
 An \code{n} (or \code{length.out}) x \code{n.ens} matrix of simulated varve
@@ -47,9 +42,8 @@ temporal persistence from either an AR(1) process or long-memory
 fractional differencing (fBm-like, via the Hurst parameter).
 }
 \details{
-The AR(1) path is fully vectorized: the whole ensemble is generated with a
-single recursive filter over a matrix of innovations (with a burn-in to
-reach stationarity), which is far faster than simulating members one at a
-time. The long-memory path still simulates members independently and can be
-spread across cores with \code{n.cores}.
+Both paths are fully vectorized across the ensemble: AR(1) via a single
+recursive filter over a matrix of innovations (with a burn-in to reach
+stationarity), and long-memory via exact circulant-embedding simulation of
+fractional Gaussian noise (see \code{\link[=fgnEnsemble]{fgnEnsemble()}}).
 }

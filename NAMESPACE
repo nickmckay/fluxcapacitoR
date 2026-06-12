@@ -3,6 +3,7 @@
 export(addVarves)
 export(ageProbsDT)
 export(createVarveAgePriors)
+export(fgnEnsemble)
 export(gammify)
 export(removeOutliers)
 export(sampleAge)
