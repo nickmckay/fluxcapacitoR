@@ -305,6 +305,11 @@ addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H,
                 MARGIN = 2,
                 \(sr) Hmisc::approxExtrap(x = model.depths, y = sr,xout = new.depths.to.model,method = "linear")$y)
 
+  # years-per-depth is physically non-negative, but linear extrapolation can dip
+  # below zero at the grid ends; clamp so the prior stays >= 0 and the resulting
+  # age model is monotone (no reversals).
+  nypd[!is.finite(nypd) | nypd < 0] <- 0
+
   if(all(dim(bvInv) == dim(nypd))){
     prior <- bvInv * nypd
   }else{
