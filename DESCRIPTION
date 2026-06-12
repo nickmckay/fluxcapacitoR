@@ -24,11 +24,12 @@ Imports:
     dplyr,
     fracdiff,
     Hmisc,
+    matrixStats,
+    parallel,
     pbapply,
     purrr,
     scam,
-    stats,
-    tidyr
+    stats
 Suggests:
     testthat (>= 3.0.0),
     knitr,

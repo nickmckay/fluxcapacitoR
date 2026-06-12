@@ -11,7 +11,8 @@ simulateVarves(
   H = NULL,
   shape = 2,
   mean = 1,
-  length.out = NA
+  length.out = NA,
+  n.cores = 1
 )
 }
 \arguments{
@@ -31,6 +32,10 @@ thicknesses.}
 
 \item{length.out}{If not \code{NA}, pad the output matrix with \code{NA} rows to this
 length.}
+
+\item{n.cores}{Number of cores for the long-memory (\code{H}) path. Defaults to
+1 (serial); values > 1 use \code{\link[parallel:mclapply]{parallel::mclapply()}} and fall back to serial
+on Windows.}
 }
 \value{
 An \code{n} (or \code{length.out}) x \code{n.ens} matrix of simulated varve
@@ -40,4 +45,11 @@ thicknesses.
 Simulates gamma-distributed annual-layer (varve) thickness series with
 temporal persistence from either an AR(1) process or long-memory
 fractional differencing (fBm-like, via the Hurst parameter).
+}
+\details{
+The AR(1) path is fully vectorized: the whole ensemble is generated with a
+single recursive filter over a matrix of innovations (with a burn-in to
+reach stationarity), which is far faster than simulating members one at a
+time. The long-memory path still simulates members independently and can be
+spread across cores with \code{n.cores}.
 }

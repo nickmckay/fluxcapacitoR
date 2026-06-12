@@ -224,25 +224,24 @@ createVarveAgePriors <- function(DT,
 #' @param DT A LiPD distribution table (list of distribution table objects)
 #'   used to evaluate the fit.
 #' @param progress Show progress bars?
+#' @param n.cores Number of cores for the long-memory (`H`) varve simulation
+#'   (passed to [simulateVarves()]); ignored for the AR(1) path, which is
+#'   already vectorized.
 #'
 #' @return A list with `agePriors` (matrix of updated age priors), `ageDepths`
 #'   (depths they're evaluated at), and `varvedPriorLogObj` (log-likelihood of
 #'   each ensemble member).
 #' @export
-addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H, ar1, n.varve.ens, DT,progress = TRUE){
+addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H, ar1, n.varve.ens, DT, progress = TRUE, n.cores = 1){
   nYears <- apply(ages, 2, \(x) ceiling(max(x)) - floor(min(x)))
+  maxN <- max(nYears)
 
-  #speed up here? Arima (AR1) is much faster
-  v1 <- purrr::map(nYears,
-                   simulateVarves,
-                   H = H,
-                   ar1 = ar1,
-                   mean = varveMean,
-                   n.ens = 1,
-                   length.out = max(nYears),
-                   .progress = progress) |>
-    purrr::list_c() |>
-    matrix(ncol = length(nYears), nrow = max(nYears))
+  # simulate the whole ensemble at the maximum length in one call, then trim
+  # each member back to its own number of years (NA-padding the tail, as the
+  # per-member length.out did before)
+  v1 <- simulateVarves(n = maxN, n.ens = length(nYears), ar1 = ar1, H = H,
+                       mean = varveMean, n.cores = n.cores)
+  for (k in which(nYears < maxN)) v1[(nYears[k] + 1L):maxN, k] <- NA
 
   vInv <- 1/v1
 
@@ -255,7 +254,8 @@ addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H,
   depthStep <- stats::median(abs(diff(adjustedDepths)),na.rm = TRUE)
   modelDepthStep <- stats::median(diff(model.depths))
 
-  if(stats::sd(diff(model.depths))/modelDepthStep < 0.1){#typical use case, standard gaps much faster
+  regularGrid <- stats::sd(diff(model.depths))/modelDepthStep < 0.1
+  if(regularGrid){#typical use case, standard gaps much faster
     nearestDepths <- roundAny(adjustedDepths,accuracy = modelDepthStep)
   }else{#irregular depths, much slower
     nearestDepths <- apply(adjustedDepths,2,
@@ -264,20 +264,43 @@ addVarves <- function(ages, model.depths,  yrPerDepth, totalDepth, varveMean, H,
 
   if(depthStep > modelDepthStep){#then interpolate
     stop("Using depth steps that are finer than annual is not yet supported.")
-  }else{#then bin
-    dfAccrate <- tidyr::pivot_longer(as.data.frame(vInv),dplyr::everything(),values_to = "accRate", names_to = "ens")
-    dfDepth <- tidyr::pivot_longer(as.data.frame(nearestDepths),dplyr::everything(),values_to = "depth", names_to = "ens")
-    df <- dplyr::bind_cols(dfAccrate,dplyr::select(dfDepth,-"ens")) |>
-      dplyr::group_by(.data$depth, .data$ens) |>
-      dplyr::summarize(binned = mean(.data$accRate,na.rm = TRUE)) |>
-      tidyr::pivot_wider(names_from = "ens",values_from = "binned") |>
-      dplyr::filter(!is.na(.data$depth))
+  }else{#then bin: mean accumulation rate within each (depth, ensemble) cell
+    depthVec <- as.vector(nearestDepths)
+    accVec <- as.vector(vInv)
+    ensVec <- rep(seq_len(ncol(vInv)), each = nrow(vInv))
+    keep <- !is.na(depthVec) & !is.na(accVec)
+    depthVec <- depthVec[keep]; accVec <- accVec[keep]; ensVec <- ensVec[keep]
+    nEns <- ncol(vInv)
+
+    # Map each observation to a depth-bin index `di` and the sorted unique
+    # depths. On a regular grid the depths are exact multiples of the step, so
+    # integer indexing + tabulate beats a unique()/match() over ~1e6 values.
+    if(regularGrid){
+      k <- as.integer(round(depthVec / modelDepthStep))
+      kmin <- min(k)
+      counts <- tabulate(k - kmin + 1L)
+      occ <- which(counts > 0L)                       # bins that actually occur
+      new.depths.to.model <- (kmin + occ - 1L) * modelDepthStep
+      dense2sparse <- integer(length(counts))
+      dense2sparse[occ] <- seq_along(occ)
+      di <- dense2sparse[k - kmin + 1L]
+    }else{
+      new.depths.to.model <- sort(unique(depthVec))
+      di <- match(depthVec, new.depths.to.model)
+    }
+    nDepth <- length(new.depths.to.model)
+
+    # one integer cell id per (depth, ensemble); bin sums and counts in a single
+    # C-backed rowsum over a two-column matrix (so the grouping is done once),
+    # then place means into a (depth x ensemble) matrix. Cells with no
+    # observations stay 0 (matching the previous NA -> 0 fill).
+    cell <- (ensVec - 1L) * nDepth + di
+    agg <- rowsum(cbind(accVec, 1), cell)
+    bvInv <- numeric(nDepth * nEns)
+    bvInv[as.integer(rownames(agg))] <- agg[, 1] / agg[, 2]
+    bvInv <- matrix(bvInv, nrow = nDepth, ncol = nEns)
   }
 
-  bvInv <- as.matrix(df)[,-1]
-  bvInv[is.na(bvInv)] <- 0
-
-  new.depths.to.model <- df$depth
   depthStep <- stats::median(diff(new.depths.to.model))
 
   #interpolate yrPerDepth to match new model.depth
