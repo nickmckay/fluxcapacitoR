@@ -34,12 +34,14 @@ Suggests:
     rmarkdown,
     ggplot2,
     lipdR,
-    geoChronR
+    ens,
+    lipdViz
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 URL: https://github.com/nickmckay/fluxcapacitoR
 BugReports: https://github.com/nickmckay/fluxcapacitoR/issues
 Remotes:
     nickmckay/lipdR,
-    nickmckay/GeoChronR
+    nickmckay/ens,
+    nickmckay/lipdViz
 RoxygenNote: 7.3.1

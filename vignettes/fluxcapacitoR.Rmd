@@ -39,7 +39,8 @@ it builds quickly; in practice you would use many more iterations.
 ```{r libs}
 library(fluxcapacitoR)
 library(lipdR)
-library(geoChronR)
+library(ens)       # computeSpectraEns()
+library(lipdViz)   # plotModelDistributions(), plotTimeseriesEns*(), plotSpectraEns()
 library(ggplot2)
 library(purrr)
 library(dplyr)
@@ -248,9 +249,9 @@ plotTimeseriesEnsRibbons(X = depths.to.model, Y = 1 / interpolated.yrPerDepth) |
 
 ## Power spectrum of sedimentation rate
 
-We pass `x.lims` explicitly here: the `plotSpectraEns()` in the released
-geoChronR errors when `x.lims` is left `NULL` (fixed on the development branch
-that this package was split from).
+We pass `x.lims` explicitly here: `plotSpectraEns()` currently errors when
+`x.lims` is left `NULL` (the frequency limits are only set on the supplied-limits
+branch). Flagged for a fix in lipdViz.
 
 ```{r spectra}
 spectraEnsOld <- computeSpectraEns(time = depths.to.model, values = 1 / interpolated.yrPerDepth)
