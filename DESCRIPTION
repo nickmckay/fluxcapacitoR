@@ -1,7 +1,7 @@
 Package: fluxcapacitoR
 Type: Package
 Title: Flux-Focused Age Modeling for Layered Sediments
-Version: 0.1.0
+Version: 0.1.1
 Date: 2026-06-12
 Authors@R: c(
     person("Nicholas", "McKay" ,email = "nick@nau.edu", role = c("aut", "cre"),
@@ -33,7 +33,7 @@ Suggests:
     knitr,
     rmarkdown,
     ggplot2,
-    lipdR,
+    lipdR (>= 0.8.4),
     ens,
     lipdViz
 Config/testthat/edition: 3
